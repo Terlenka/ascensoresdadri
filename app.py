@@ -1,27 +1,25 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
+import os
 import plotly.graph_objects as go
 from datetime import datetime
 from fpdf import FPDF
 
-# --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Gestión Ascensores - Naiara", layout="wide")
+# --- CONFIGURACIÓN DE BASE DE DATOS Y PERSISTENCIA ---
+db_dir = os.path.join(os.getcwd(), 'data')
+if not os.path.exists(db_dir):
+    os.makedirs(db_dir)
 
-# --- CABECERA CON LOGOS ---
-def mostrar_logos():
-    col_l1, col_l2 = st.columns(2)
-    with col_l1:
-        st.image("https://ascensoresdadri.com/wp-content/uploads/2025/01/ascensores-dadir-logo.png", width=250)
-    with col_l2:
-        st.image("https://agrascensores.com/wp-content/uploads/2025/10/Diseno-sin-titulo-24.png", width=250)
-
-# --- CONEXIÓN DB ---
-conn = sqlite3.connect('obras_datos.db', check_same_thread=False)
+db_path = os.path.join(db_dir, 'obras_datos.db')
+conn = sqlite3.connect(db_path, check_same_thread=False)
 c = conn.cursor()
 
 def init_db():
-    c.execute('CREATE TABLE IF NOT EXISTS obras (id INTEGER PRIMARY KEY, nombre TEXT, presupuesto REAL, estado TEXT, contratista TEXT)')
+    # Añadimos fecha_finalizacion para control de cierre
+    c.execute('''CREATE TABLE IF NOT EXISTS obras 
+                 (id INTEGER PRIMARY KEY, nombre TEXT, presupuesto REAL, 
+                  estado TEXT, contratista TEXT, fecha_inicio TEXT, fecha_fin TEXT)''')
     c.execute('CREATE TABLE IF NOT EXISTS trabajadores (id INTEGER PRIMARY KEY, nombre TEXT, dni TEXT)')
     c.execute('CREATE TABLE IF NOT EXISTS partes (id INTEGER PRIMARY KEY, t_id INTEGER, o_id INTEGER, fecha TEXT, horas REAL, notas TEXT)')
     c.execute('CREATE TABLE IF NOT EXISTS gastos (id INTEGER PRIMARY KEY, o_id INTEGER, tipo TEXT, importe REAL, fecha TEXT, descripcion TEXT)')
@@ -29,166 +27,182 @@ def init_db():
 
 init_db()
 
-# --- NAVEGACIÓN ---
-mostrar_logos()
-menu = ["📊 Dashboard Mensual (Ricardo)", "📝 Registrar Parte", "💰 Registrar Gastos", "⚙️ Configuración", "🛠️ Panel de Administración"]
-choice = st.sidebar.radio("Menú de Naiara", menu)
+# --- DISEÑO CSS PERSONALIZADO (SUPERBONITO) ---
+st.set_page_config(page_title="Gestión Ascensores Pro", layout="wide")
 
-# --- PANEL DE ADMINISTRACIÓN (BORRAR) ---
-if choice == "🛠️ Panel de Administración":
-    st.header("Administración de Datos")
-    t1, t2 = st.tabs(["Trabajadores", "Obras"])
-    with t1:
-        st.write("Lista de Trabajadores")
-        df_t = pd.read_sql_query("SELECT id, nombre, dni FROM trabajadores", conn)
-        st.dataframe(df_t, use_container_width=True)
-        id_eliminar_t = st.number_input("ID Trabajador a eliminar", min_value=0, step=1)
-        if st.button("Eliminar Trabajador"):
-            c.execute(f"DELETE FROM trabajadores WHERE id={id_eliminar_t}")
-            conn.commit()
-            st.rerun()
-    with t2:
-        st.write("Lista de Obras")
-        df_o = pd.read_sql_query("SELECT id, nombre, estado FROM obras", conn)
-        st.dataframe(df_o, use_container_width=True)
-        id_eliminar_o = st.number_input("ID Obra a eliminar", min_value=0, step=1)
-        if st.button("Eliminar Obra"):
-            c.execute(f"DELETE FROM obras WHERE id={id_eliminar_o}")
-            conn.commit()
-            st.rerun()
+st.markdown("""
+    <style>
+    .main { background-color: #f8f9fa; }
+    .stButton>button { width: 100%; border-radius: 10px; height: 3em; background-color: #004a99; color: white; border: none; }
+    .stButton>button:hover { background-color: #003366; border: none; }
+    .card { background-color: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; border: 1px solid #e0e0e0; }
+    h1, h2, h3 { color: #004a99; font-family: 'Helvetica Neue', sans-serif; }
+    .reportview-container .main .block-container { padding-top: 2rem; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- CONFIGURACIÓN (ALTAS) ---
-elif choice == "⚙️ Configuración":
-    st.header("Altas de Sistema")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.subheader("Añadir Trabajador")
-        t_nom = st.text_input("Nombre Completo")
-        t_dni = st.text_input("DNI del trabajador")
-        if st.button("Guardar Trabajador"):
-            c.execute("INSERT INTO trabajadores (nombre, dni) VALUES (?,?)", (t_nom, t_dni))
-            conn.commit()
-            st.success("Guardado")
-    with c2:
-        st.subheader("Nueva Obra")
-        o_nom = st.text_input("Nombre de la Obra")
-        o_pre = st.number_input("Presupuesto (€)", min_value=0.0)
-        o_est = st.selectbox("Estado", ["no iniciada", "en curso", "bloqueada", "finalizada"])
-        if st.button("Crear Obra"):
-            c.execute("INSERT INTO obras (nombre, presupuesto, estado) VALUES (?,?,?)", (o_nom, o_pre, o_est))
-            conn.commit()
-            st.success("Creada")
+# --- CABECERA CON LOGOS CORPORATIVOS ---
+def cabecera():
+    col1, col2 = st.columns([1,1])
+    with col1:
+        st.image("https://ascensoresdadri.com/wp-content/uploads/2025/01/ascensores-dadir-logo.png", width=220)
+    with col2:
+        st.image("https://agrascensores.com/wp-content/uploads/2025/10/Diseno-sin-titulo-24.png", width=220)
+    st.divider()
 
-# --- REGISTRO DE GASTOS ---
-elif choice == "💰 Registrar Gastos":
-    st.header("Gastos de Obra")
-    obs = pd.read_sql_query("SELECT * FROM obras", conn)
-    if not obs.empty:
-        with st.form("gastos_form"):
-            o_sel = st.selectbox("Seleccionar Obra", obs['nombre'])
-            tipo = st.selectbox("Concepto", ["Dietas", "Gasolina", "Materiales", "Contenedor", "Otros"])
-            desc = ""
-            if tipo == "Otros":
-                desc = st.text_input("Especificar concepto de gasto")
-            monto = st.number_input("Importe (€)", min_value=0.0)
-            fec = st.date_input("Fecha", datetime.now())
-            if st.form_submit_button("Guardar Gasto"):
-                oid = int(obs[obs['nombre']==o_sel]['id'].values[0])
-                c.execute("INSERT INTO gastos (o_id, tipo, importe, fecha, descripcion) VALUES (?,?,?,?,?)", 
-                          (oid, tipo, monto, fec.strftime("%Y-%m-%d"), desc))
-                conn.commit()
-                st.success("Gasto registrado")
+cabecera()
 
-# --- REGISTRO DE PARTES ---
-elif choice == "📝 Registrar Parte":
-    st.header("Partes de Trabajo Diarios")
-    tbs = pd.read_sql_query("SELECT * FROM trabajadores", conn)
-    obs = pd.read_sql_query("SELECT * FROM obras WHERE estado='en curso'", conn)
-    if not tbs.empty and not obs.empty:
-        with st.form("partes_form"):
-            t_sel = st.selectbox("Trabajador", tbs['nombre'])
-            o_sel = st.selectbox("Obra", obs['nombre'])
-            fec = st.date_input("Fecha", datetime.now())
-            # Sugerencia 8h lun-jue, 6h vie
-            sug = 6.0 if fec.weekday() == 4 else 8.0
-            hrs = st.number_input("Horas dedicadas", value=sug, step=0.5)
-            notas = st.text_area("Notas / Tareas")
-            if st.form_submit_button("Registrar Parte"):
-                tid = int(tbs[tbs['nombre']==t_sel]['id'].values[0])
-                oid = int(obs[obs['nombre']==o_sel]['id'].values[0])
-                c.execute("INSERT INTO partes (t_id, o_id, fecha, horas, notas) VALUES (?,?,?,?,?)", 
-                          (tid, oid, fec.strftime("%Y-%m-%d"), hrs, notas))
-                conn.commit()
-                st.success("Parte guardado")
+# --- MENÚ LATERAL ---
+with st.sidebar:
+    st.title("⚙️ Menú de Naiara")
+    choice = st.radio("Ir a:", ["📊 Dashboard Ricardo", "📝 Gestión de Obras", "👷 Gestión de Personal", "🛠️ Administración Avanzada"])
 
-# --- DASHBOARD MENSUAL GLOBAL ---
-elif choice == "📊 Dashboard Mensual (Ricardo)":
-    st.header("Informe Global de Rentabilidad Mensual")
-    meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-    mes_sel = st.selectbox("Ver informe del mes:", meses)
-    mes_idx = str(meses.index(mes_sel) + 1).zfill(2)
+# --- 1. DASHBOARD RICARDO (Filtro por estado) ---
+if choice == "📊 Dashboard Ricardo":
+    st.header("📈 Informe de Rentabilidad Mensual")
+    ver_finalizadas = st.checkbox("Incluir obras finalizadas en el informe")
     
-    df_obras = pd.read_sql_query("SELECT * FROM obras", conn)
+    query = "SELECT * FROM obras" if ver_finalizadas else "SELECT * FROM obras WHERE estado != 'finalizada'"
+    df_obras = pd.read_sql_query(query, conn)
+    
     if not df_obras.empty:
-        # Gráfico Comparativo de Gastos
+        # Lógica de meses
+        meses = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+        mes_sel = st.selectbox("Consultar Mes:", meses)
+        mes_num = str(meses.index(mes_sel) + 1).zfill(2)
+        
         stats = []
-        for i, row in df_obras.iterrows():
-            g_mes = pd.read_sql_query(f"SELECT SUM(importe) FROM gastos WHERE o_id={row['id']} AND strftime('%m', fecha)='{mes_idx}'", conn).iloc[0,0] or 0
-            h_mes = pd.read_sql_query(f"SELECT SUM(horas) FROM partes WHERE o_id={row['id']} AND strftime('%m', fecha)='{mes_idx}'", conn).iloc[0,0] or 0
-            # Rentabilidad global
-            g_total_obra = pd.read_sql_query(f"SELECT SUM(importe) FROM gastos WHERE o_id={row['id']}", conn).iloc[0,0] or 0
-            h_total_obra = pd.read_sql_query(f"SELECT SUM(horas) FROM partes WHERE o_id={row['id']}", conn).iloc[0,0] or 0
-            rent = (row['presupuesto'] - g_total_obra) / h_total_obra if h_total_obra > 0 else 0
+        for _, row in df_obras.iterrows():
+            g_mes = pd.read_sql_query(f"SELECT SUM(importe) FROM gastos WHERE o_id={row['id']} AND strftime('%m', fecha)='{mes_num}'", conn).iloc[0,0] or 0
+            h_mes = pd.read_sql_query(f"SELECT SUM(horas) FROM partes WHERE o_id={row['id']} AND strftime('%m', fecha)='{mes_num}'", conn).iloc[0,0] or 0
+            
+            # Rentabilidad Global
+            g_total = pd.read_sql_query(f"SELECT SUM(importe) FROM gastos WHERE o_id={row['id']}", conn).iloc[0,0] or 0
+            h_total = pd.read_sql_query(f"SELECT SUM(horas) FROM partes WHERE o_id={row['id']}", conn).iloc[0,0] or 0
+            rent = (row['presupuesto'] - g_total) / h_total if h_total > 0 else 0
             
             stats.append({
-                "Obra": row['nombre'],
-                "Presupuesto": row['presupuesto'],
-                "Gastos Mes": g_mes,
-                "Horas Mes": h_mes,
-                "Rentabilidad Global": round(rent, 2)
+                "Obra": row['nombre'], "Presupuesto": row['presupuesto'], 
+                "Gastos Mes": g_mes, "Horas Mes": h_mes, "Rentabilidad Global (€/h)": round(rent, 2)
             })
         
         df_stats = pd.DataFrame(stats)
         
-        # Gráfico
-        fig = go.Figure(data=[
-            go.Bar(name='Presupuesto', x=df_stats['Obra'], y=df_stats['Presupuesto'], marker_color='#1f77b4'),
-            go.Bar(name='Gastos Mes', x=df_stats['Obra'], y=df_stats['Gastos Mes'], marker_color='#ef553b')
-        ])
+        # Gráficos Pro
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=df_stats['Obra'], y=df_stats['Presupuesto'], name='Presupuesto', marker_color='#004a99'))
+        fig.add_trace(go.Bar(x=df_stats['Obra'], y=df_stats['Gastos Mes'], name=f'Gastos {mes_sel}', marker_color='#ff4b4b'))
         st.plotly_chart(fig, use_container_width=True)
         
+        # Tabla Visualmente Limpia
         st.subheader("Resumen Económico")
-        st.table(df_stats)
+        df_display = df_stats.copy()
+        df_display["Presupuesto"] = df_display["Presupuesto"].map("{:,.2f} €".format)
+        df_display["Gastos Mes"] = df_display["Gastos Mes"].map("{:,.2f} €".format)
+        st.dataframe(df_display, use_container_width=True)
 
-        # GENERADOR PDF GLOBAL
+        # Botón PDF Corregido
         if st.button("Generar Informe PDF para Ricardo"):
             pdf = FPDF()
             pdf.add_page()
-            # Logos en PDF
-            pdf.image("https://ascensoresdadri.com/wp-content/uploads/2025/01/ascensores-dadir-logo.png", 10, 8, 50)
-            pdf.image("https://agrascensores.com/wp-content/uploads/2025/10/Diseno-sin-titulo-24.png", 150, 8, 50)
-            pdf.ln(30)
-            
             pdf.set_font("Arial", 'B', 16)
-            pdf.cell(190, 10, f"INFORME MENSUAL - {mes_sel.upper()} 2026", ln=True, align='C')
+            pdf.cell(190, 10, f"INFORME GLOBAL - {mes_sel.upper()} 2026", ln=True, align='C')
             pdf.ln(10)
-            
             pdf.set_font("Arial", 'B', 10)
-            pdf.cell(60, 10, "Obra", 1)
-            pdf.cell(30, 10, "Presu.", 1)
-            pdf.cell(30, 10, "Gastos Mes", 1)
-            pdf.cell(30, 10, "Horas Mes", 1)
-            pdf.cell(40, 10, "Rentab. (EUR/h)", 1)
-            pdf.ln()
-            
+            # Cabecera tabla PDF
+            pdf.cell(60, 10, "Obra", 1); pdf.cell(40, 10, "Presu.", 1); pdf.cell(40, 10, "Gastos M.", 1); pdf.cell(40, 10, "Rentab.", 1); pdf.ln()
             pdf.set_font("Arial", '', 9)
             for s in stats:
-                pdf.cell(60, 10, s['Obra'][:25], 1)
-                pdf.cell(30, 10, f"{s['Presupuesto']}e", 1)
-                pdf.cell(30, 10, f"{s['Gastos Mes']}e", 1)
-                pdf.cell(30, 10, f"{s['Horas Mes']}h", 1)
-                pdf.cell(40, 10, f"{s['Rentabilidad Global']}", 1)
-                pdf.ln()
+                pdf.cell(60, 10, s['Obra'][:28], 1); pdf.cell(40, 10, f"{s['Presupuesto']}e", 1); pdf.cell(40, 10, f"{s['Gastos Mes']}e", 1); pdf.cell(40, 10, f"{s['Rentabilidad Global']}", 1); pdf.ln()
             
-            pdf_data = pdf.output(dest='S')
-            st.download_button("📥 Descargar PDF Global", pdf_data, f"Informe_Mensual_{mes_sel}.pdf", "application/pdf")
+            pdf_bytes = bytes(pdf.output())
+            st.download_button("📥 Descargar PDF Global", pdf_bytes, f"Informe_{mes_sel}_2026.pdf", "application/pdf")
+
+# --- 2. GESTIÓN DE OBRAS (All-in-One Panel) ---
+elif choice == "📝 Gestión de Obras":
+    st.header("🗂️ Panel de Proyectos Activos")
+    
+    col_add, col_close = st.columns(2)
+    with col_add:
+        with st.expander("➕ Añadir Nueva Obra"):
+            n_o = st.text_input("Nombre del Proyecto")
+            p_o = st.number_input("Presupuesto Total (€)", min_value=0.0)
+            if st.button("Guardar Obra"):
+                c.execute("INSERT INTO obras (nombre, presupuesto, estado) VALUES (?,?,'en curso')", (n_o, p_o))
+                conn.commit(); st.success("Obra Creada"); st.rerun()
+    
+    with col_close:
+        with st.expander("🏁 Finalizar una Obra"):
+            obs_activas = pd.read_sql_query("SELECT id, nombre FROM obras WHERE estado != 'finalizada'", conn)
+            o_fin = st.selectbox("Obra a cerrar", obs_activas['nombre'] if not obs_activas.empty else ["Sin obras"])
+            if st.button("Marcar como Finalizada"):
+                hoy = datetime.now().strftime("%Y-%m-%d")
+                c.execute(f"UPDATE obras SET estado='finalizada', fecha_fin='{hoy}' WHERE nombre='{o_fin}'")
+                conn.commit(); st.success(f"{o_fin} finalizada"); st.rerun()
+
+    st.divider()
+    
+    # Registro de Partes y Gastos con diseño limpio
+    st.subheader("Operaciones Diarias")
+    c_p, c_g = st.columns(2)
+    
+    with c_p:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown("### 📝 Registrar Parte de Horas")
+        tbs = pd.read_sql_query("SELECT * FROM trabajadores", conn)
+        obs = pd.read_sql_query("SELECT * FROM obras WHERE estado='en curso'", conn)
+        if not tbs.empty and not obs.empty:
+            t_s = st.selectbox("Trabajador", tbs['nombre'], key="p_t")
+            o_s = st.selectbox("Obra", obs['nombre'], key="p_o")
+            f_p = st.date_input("Fecha", datetime.now(), key="p_f")
+            # Lógica Viernes 6h / Resto 8h
+            sug = 6.0 if f_p.weekday() == 4 else 8.0
+            h_p = st.number_input("Horas", value=sug, step=0.5, key="p_h")
+            not_p = st.text_area("Tareas", key="p_n")
+            if st.button("Guardar Parte"):
+                tid = int(tbs[tbs['nombre']==t_s]['id'].values[0])
+                oid = int(obs[obs['nombre']==o_s]['id'].values[0])
+                c.execute("INSERT INTO partes (t_id, o_id, fecha, horas, notas) VALUES (?,?,?,?,?)", (tid, oid, f_p.strftime("%Y-%m-%d"), h_p, not_p))
+                conn.commit(); st.success("Guardado")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with c_g:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown("### 💰 Registrar Gasto")
+        if not obs.empty:
+            og_s = st.selectbox("Obra", obs['nombre'], key="g_o")
+            cat = st.selectbox("Concepto", ["Dietas", "Gasolina", "Materiales", "Contenedor", "Otros"], key="g_c")
+            desc = ""
+            if cat == "Otros": desc = st.text_input("Especificar concepto", key="g_d")
+            imp = st.number_input("Importe (€)", min_value=0.0, key="g_i")
+            if st.button("Guardar Gasto"):
+                oid = int(obs[obs['nombre']==og_s]['id'].values[0])
+                c.execute("INSERT INTO gastos (o_id, tipo, importe, fecha, descripcion) VALUES (?,?,?,?,?)", (oid, cat, imp, datetime.now().strftime("%Y-%m-%d"), desc))
+                conn.commit(); st.success("Gasto registrado")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+# --- 3. PERSONAL (Con DNI) ---
+elif choice == "👷 Gestión de Personal":
+    st.header("👥 Plantilla de Trabajadores")
+    with st.expander("➕ Añadir Nuevo Trabajador"):
+        n_t = st.text_input("Nombre y Apellidos")
+        d_t = st.text_input("DNI / NIE")
+        if st.button("Registrar Trabajador"):
+            c.execute("INSERT INTO trabajadores (nombre, dni) VALUES (?,?)", (n_t, d_t))
+            conn.commit(); st.success(f"{n_t} añadido"); st.rerun()
+    
+    st.write("### Listado Actual")
+    df_t = pd.read_sql_query("SELECT id, nombre, dni FROM trabajadores", conn)
+    st.table(df_t)
+
+# --- 4. ADMINISTRACIÓN (Eliminar) ---
+elif choice == "🛠️ Administración Avanzada":
+    st.header("⚙️ Limpieza de Base de Datos")
+    st.warning("Cuidado: Las eliminaciones son permanentes.")
+    
+    df_o_all = pd.read_sql_query("SELECT id, nombre, estado, fecha_fin FROM obras", conn)
+    st.dataframe(df_o_all, use_container_width=True)
+    id_del = st.number_input("ID de Obra a eliminar", min_value=0, step=1)
+    if st.button("❌ Eliminar Obra Permanentemente"):
+        c.execute(f"DELETE FROM obras WHERE id={id_del}")
+        conn.commit(); st.success("Obra eliminada"); st.rerun()
